@@ -1,84 +1,137 @@
-name: Windows RDP Access
+name: RDP with Bore
+
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  rdp:
     runs-on: windows-latest
+    timeout-minutes: 360
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Setup RDP
+    - name: Enable RDP
+      shell: pwsh
       run: |
-        # Enable RDP
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        # RDP servisini etkinleştir
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
         
-        # Enable firewall rules for RDP
-        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-        netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+        # Windows Firewall'da RDP'ye izin ver
+        Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
         
-        # Set authentication
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        # runneradmin kullanıcısı için şifre belirle
+        Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText 'Pass123!' -Force)
         
-        # Set password for runneradmin
-        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "ActionRunner2024!" -Force)
-        
-        # Enable the user account
-        Enable-LocalUser -Name "runneradmin"
-      shell: powershell
+        Write-Host "RDP başarıyla etkinleştirildi"
 
-    - name: Download and Setup Cloudflared
+    - name: Download and Extract Bore
+      shell: pwsh
       run: |
-        # Download cloudflared
-        Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
+        # Bore'u indir
+        Write-Host "Bore indiriliyor..."
+        Invoke-WebRequest -Uri 'https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-pc-windows-msvc.zip' -OutFile bore.zip
         
-        # Make it executable and start tunnel in background
-        Start-Process -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389" -WindowStyle Hidden
+        # Arşivi çıkart
+        Expand-Archive bore.zip -DestinationPath . -Force
         
-        # Wait for tunnel to establish
-        Start-Sleep -Seconds 15
-      shell: powershell
+        # bore.exe dosyasını bul ve ana dizine kopyala
+        $exe = Get-ChildItem -Recurse -File -Filter 'bore.exe' | Select-Object -First 1
+        if ($exe) { 
+          Copy-Item $exe.FullName -Destination (Join-Path $PWD 'bore.exe') -Force 
+          Write-Host "Bore başarıyla indirildi ve hazırlandı"
+        } else {
+          throw "bore.exe bulunamadı"
+        }
 
-    - name: Get Connection Info
+    - name: Start Bore Tunnel and Display Connection Info
+      shell: pwsh
       run: |
-        Write-Host "========================================="
-        Write-Host "RDP CONNECTION INFORMATION:"
-        Write-Host "========================================="
+        $outputFile = Join-Path $PWD 'bore_output.txt'
         
-        # Try to get cloudflared tunnel URL from logs
-        Write-Host "Checking for Cloudflared tunnel URL..."
+        # Önceki çıktı dosyasını temizle
+        if (Test-Path $outputFile) { Remove-Item $outputFile -Force }
         
-        # Get public IP as backup
-        try {
-          $publicIP = (Invoke-WebRequest -Uri "http://ifconfig.me/ip" -TimeoutSec 10).Content.Trim()
-          Write-Host "Public IP: $publicIP"
-        } catch {
-          Write-Host "Could not retrieve public IP"
+        # Bore tünelini başlat
+        Write-Host "Bore tüneli başlatılıyor..."
+        $process = Start-Process -FilePath '.\bore.exe' -ArgumentList 'local 3389 --to bore.pub' -RedirectStandardOutput $outputFile -RedirectStandardError $outputFile -WindowStyle Hidden -PassThru
+        
+        # Port bilgisini yakala
+        $port = $null
+        $maxWaitTime = 120
+        $startTime = Get-Date
+        
+        while (((Get-Date) - $startTime).TotalSeconds -lt $maxWaitTime) {
+          if (Test-Path $outputFile) {
+            $content = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
+            
+            # Farklı port formatlarını kontrol et
+            if ($content -match 'bore\.pub:(\d+)') { 
+              $port = $matches[1]
+              break 
+            }
+            if ($content -match 'remote port(?:\s+is|\s+assigned\s+as|\s+assigned|:)?\s*(\d+)') { 
+              $port = $matches[1]
+              break 
+            }
+            if ($content -match 'assigned port:?\s*(\d+)') { 
+              $port = $matches[1]
+              break 
+            }
+            if ($content -match 'listening on bore\.pub:(\d+)') { 
+              $port = $matches[1]
+              break 
+            }
+          }
+          Start-Sleep -Seconds 2
         }
         
+        # Port bulunamazsa hata ver
+        if (-not $port) {
+          Write-Host "HATA: Bore portu tespit edilemedi!"
+          Write-Host "Bore çıktısı:"
+          if (Test-Path $outputFile) { 
+            Get-Content $outputFile | ForEach-Object { Write-Host $_ }
+          }
+          throw "Bore portu bulunamadı - tünel başlatılamadı"
+        }
+        
+        # Bağlantı bilgilerini göster
+        $fullAddress = "bore.pub:$port"
         Write-Host ""
-        Write-Host "CREDENTIALS:"
-        Write-Host "Username: runneradmin"
-        Write-Host "Password: ActionRunner2024!"
+        Write-Host "=================================================="
+        Write-Host "🔗 RDP BAĞLANTI BİLGİLERİ"
+        Write-Host "=================================================="
+        Write-Host "📍 Host Adresi    : $fullAddress"
+        Write-Host "👤 Kullanıcı Adı  : runneradmin"
+        Write-Host "🔐 Şifre          : Pass123!"
         Write-Host ""
-        Write-Host "CONNECTION METHODS:"
-        Write-Host "1. Check the cloudflared process output above for tunnel URL"
-        Write-Host "2. Look for format: https://xxxxx.trycloudflare.com"
-        Write-Host "3. Use that URL in your RDP client"
-        Write-Host "========================================="
-      shell: powershell
+        Write-Host "🖥️  REMMINA İÇİN:"
+        Write-Host "   • Protokol: RDP"
+        Write-Host "   • Sunucu: $fullAddress"
+        Write-Host "   • Kullanıcı: runneradmin"
+        Write-Host "   • Şifre: Pass123!"
+        Write-Host "=================================================="
+        Write-Host ""
+        
+        # Tünel durumunu kontrol et
+        if ($process -and !$process.HasExited) {
+          Write-Host "✅ Bore tüneli başarıyla çalışıyor (PID: $($process.Id))"
+        } else {
+          Write-Host "⚠️  Bore tüneli durumu belirsiz"
+        }
 
     - name: Keep Session Alive
+      shell: pwsh
       run: |
-        Write-Host "Keeping session alive for 6 hours..."
-        Write-Host "Current time: $(Get-Date)"
+        Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
+        Write-Host "⏰ Başlangıç zamanı: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
         
-        $endTime = (Get-Date).AddHours(6)
-        while ((Get-Date) -lt $endTime) {
-          $remaining = $endTime - (Get-Date)
-          Write-Host "Time remaining: $($remaining.Hours)h $($remaining.Minutes)m - $(Get-Date -Format 'HH:mm:ss')"
-          Start-Sleep -Seconds 300  # 5 minutes
+        # Her 30 dakikada bir durum mesajı göster
+        for ($i = 1; $i -le 720; $i++) {
+          Start-Sleep -Seconds 30
+          if ($i % 60 -eq 0) {
+            $elapsed = $i / 2
+            Write-Host "⏱️  Geçen süre: $elapsed dakika - Oturum hala aktif"
+          }
         }
-      shell: powershell
+        
+        Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
