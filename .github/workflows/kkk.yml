@@ -1,276 +1,106 @@
-name: Windows Desktop (RDP via Web)
+name: Simple Windows RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  desktop:
+  rdp:
     runs-on: windows-latest
-    timeout-minutes: 360  # max 6 saat
-
-    env:
-      RDP_PASSWORD: Pass123!
-      WEB_PORT: 8080
+    timeout-minutes: 360
 
     steps:
-      - name: Enable RDP and Configure
+      - name: Enable RDP
         shell: pwsh
         run: |
-          # RDP'yi etkinleştir
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
           Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+          Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText 'Pass123!' -Force)
           
-          # Güvenlik ayarlarını gevşet (web erişimi için)
+          # RDP uyumluluk ayarları
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fAllowSecProtocolNegotiation' -Value 0
-          
-          # Kullanıcı şifresi ayarla
-          Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText $env:RDP_PASSWORD -Force)
-          
-          # RDP servisini yeniden başlat
           Restart-Service TermService -Force
           
-          Write-Host "✅ RDP yapılandırıldı"
+          Write-Host "✅ RDP etkinleştirildi"
 
-      - name: Install Apache Guacamole (Web RDP Client)
+      - name: Download Ngrok
         shell: pwsh
         run: |
-          Write-Host "📥 Apache Guacamole kurulumu başlatılıyor..."
-          
-          # Java kurulumu
-          Write-Host "Java kuruluyor..."
-          choco install openjdk11 -y
-          
-          # Tomcat kurulumu
-          Write-Host "Tomcat kuruluyor..."
-          choco install tomcat -y
-          
-          # Guacamole indirme
-          Write-Host "Guacamole indiriliyor..."
-          $guacamoleVersion = "1.5.3"
-          $guacamoleWar = "https://archive.apache.org/dist/guacamole/$guacamoleVersion/binary/guacamole-$guacamoleVersion.war"
-          $guacamoleServer = "https://archive.apache.org/dist/guacamole/$guacamoleVersion/binary/guacamole-server-$guacamoleVersion.msi"
-          
-          Invoke-WebRequest -Uri $guacamoleWar -OutFile "guacamole.war"
-          Invoke-WebRequest -Uri $guacamoleServer -OutFile "guacamole-server.msi"
-          
-          Write-Host "✅ Guacamole dosyaları indirildi"
+          Write-Host "📥 Ngrok indiriliyor..."
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath . -Force
+          Remove-Item ngrok.zip -Force
+          Write-Host "✅ Ngrok hazırlandı"
 
-      - name: Setup Simple Web RDP (Alternative)
+      - name: Start Ngrok and Show Connection Info
         shell: pwsh
         run: |
-          Write-Host "🌐 Basit Web RDP kurulumu..."
+          Write-Host "🚀 Ngrok TCP tüneli başlatılıyor..."
           
-          # Node.js kurulumu
-          choco install nodejs -y
-          
-          # Basit web RDP proxy oluştur
-          $webRdpScript = @'
-          const express = require('express');
-          const { createProxyMiddleware } = require('http-proxy-middleware');
-          const app = express();
-          
-          // Statik dosyalar için
-          app.use(express.static('public'));
-          
-          // Ana sayfa
-          app.get('/', (req, res) => {
-            res.send(`
-              <!DOCTYPE html>
-              <html>
-              <head>
-                  <title>Windows Desktop</title>
-                  <style>
-                      body { font-family: Arial, sans-serif; margin: 40px; background: #f0f0f0; }
-                      .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                      .info { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 20px 0; }
-                      .button { background: #2196F3; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 5px; }
-                      .button:hover { background: #1976D2; }
-                  </style>
-              </head>
-              <body>
-                  <div class="container">
-                      <h1>🖥️ Windows Desktop Erişimi</h1>
-                      <div class="info">
-                          <h3>📍 Bağlantı Bilgileri:</h3>
-                          <p><strong>Host:</strong> Bu sayfanın URL'sindeki domain</p>
-                          <p><strong>Port:</strong> 3389</p>
-                          <p><strong>Kullanıcı:</strong> runneradmin</p>
-                          <p><strong>Şifre:</strong> ${process.env.RDP_PASSWORD || 'Pass123!'}</p>
-                      </div>
-                      
-                      <h3>🔧 Bağlantı Seçenekleri:</h3>
-                      <a href="/rdp" class="button">🌐 Web RDP (Tarayıcıda Aç)</a>
-                      <a href="rdp://runneradmin:${process.env.RDP_PASSWORD || 'Pass123!'}@" class="button">💻 RDP İstemcisi</a>
-                      
-                      <div class="info">
-                          <h4>📱 Mobil/Tablet için:</h4>
-                          <p>Microsoft Remote Desktop uygulamasını indirin ve yukarıdaki bilgileri girin.</p>
-                      </div>
-                      
-                      <div class="info">
-                          <h4>🐧 Linux için:</h4>
-                          <p><code>xfreerdp /v:HOST:PORT /u:runneradmin /p:Pass123! /cert-ignore</code></p>
-                          <p><code>rdesktop -u runneradmin -p Pass123! HOST:PORT</code></p>
-                      </div>
-                  </div>
-              </body>
-              </html>
-            `);
-          });
-          
-          // RDP web sayfası
-          app.get('/rdp', (req, res) => {
-            res.send(`
-              <!DOCTYPE html>
-              <html>
-              <head>
-                  <title>Web RDP</title>
-                  <style>body { margin: 0; background: #000; }</style>
-              </head>
-              <body>
-                  <div style="color: white; text-align: center; padding: 50px;">
-                      <h2>🔧 Web RDP Hazırlanıyor...</h2>
-                      <p>Tam web RDP deneyimi için Apache Guacamole kurulumu gerekiyor.</p>
-                      <p>Şimdilik RDP istemcinizi kullanın:</p>
-                      <p><strong>Host:</strong> ${req.get('host').split(':')[0]}</p>
-                      <p><strong>Port:</strong> 3389</p>
-                      <p><strong>User:</strong> runneradmin</p>
-                      <p><strong>Pass:</strong> Pass123!</p>
-                  </div>
-              </body>
-              </html>
-            `);
-          });
-          
-          const PORT = process.env.WEB_PORT || 8080;
-          app.listen(PORT, () => {
-            console.log(`Web RDP interface running on port ${PORT}`);
-          });
-          '@
-          
-          $webRdpScript | Out-File -FilePath "web-rdp.js" -Encoding UTF8
-          
-          # Package.json oluştur
-          $packageJson = @'
-          {
-            "name": "web-rdp",
-            "version": "1.0.0",
-            "dependencies": {
-              "express": "^4.18.2",
-              "http-proxy-middleware": "^2.0.6"
-            }
-          }
-          '@
-          
-          $packageJson | Out-File -FilePath "package.json" -Encoding UTF8
-          
-          # Bağımlılıkları kur
-          npm install
-          
-          Write-Host "✅ Web RDP arayüzü hazırlandı"
-
-      - name: Start Web Interface
-        shell: pwsh
-        run: |
-          Write-Host "🚀 Web arayüzü başlatılıyor..."
-          
-          # Web sunucusunu arka planda başlat
+          # Ngrok'u arka planda başlat
           $job = Start-Job -ScriptBlock {
-            Set-Location $using:PWD
-            $env:RDP_PASSWORD = $using:env:RDP_PASSWORD
-            $env:WEB_PORT = $using:env:WEB_PORT
-            node web-rdp.js
+            & .\ngrok.exe tcp 3389 --log stdout
           }
           
-          Start-Sleep -Seconds 5
-          Write-Host "✅ Web sunucusu başlatıldı (Port: $env:WEB_PORT)"
-
-      - name: Start Cloudflare Tunnel
-        id: tunnel
-        shell: pwsh
-        run: |
-          Write-Host "🌐 Cloudflare Tunnel başlatılıyor..."
+          # 30 saniye bekle
+          Start-Sleep -Seconds 30
           
-          # Cloudflared indir
-          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
-          
-          # Tunnel başlat
-          $job = Start-Job -ScriptBlock {
-            & .\cloudflared.exe tunnel --url "http://localhost:$using:env:WEB_PORT" --no-autoupdate
-          }
-          
-          # URL'yi yakala
-          Start-Sleep -Seconds 15
-          $tunnelUrl = $null
-          
+          # Tunnel bilgisini al
+          $tunnelFound = $false
           for ($i = 1; $i -le 20; $i++) {
-            $output = Receive-Job -Job $job -Keep
-            if ($output) {
-              $urlMatch = $output | Where-Object { $_ -match 'https://[a-z0-9-]+\.trycloudflare\.com' }
-              if ($urlMatch) {
-                $tunnelUrl = ($urlMatch | Select-Object -First 1) -replace '.*?(https://[a-z0-9-]+\.trycloudflare\.com).*', '$1'
-                break
+            try {
+              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -Method Get -TimeoutSec 3
+              
+              if ($response.tunnels -and $response.tunnels.Count -gt 0) {
+                $tunnel = $response.tunnels | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
+                
+                if ($tunnel -and $tunnel.public_url) {
+                  $publicUrl = $tunnel.public_url
+                  $parts = $publicUrl -replace "tcp://", "" -split ":"
+                  $host = $parts[0]
+                  $port = $parts[1]
+                  
+                  Write-Host ""
+                  Write-Host "=================================================="
+                  Write-Host "🖥️ WINDOWS RDP BAĞLANTI BİLGİLERİ"
+                  Write-Host "=================================================="
+                  Write-Host "📍 Host: $host"
+                  Write-Host "🔌 Port: $port"
+                  Write-Host "👤 Kullanıcı: runneradmin"
+                  Write-Host "🔐 Şifre: Pass123!"
+                  Write-Host ""
+                  Write-Host "🖥️ REMMINA AYARLARI:"
+                  Write-Host "   • Protokol: RDP"
+                  Write-Host "   • Sunucu: $host"
+                  Write-Host "   • Port: $port"
+                  Write-Host "   • Kullanıcı: runneradmin"
+                  Write-Host "   • Şifre: Pass123!"
+                  Write-Host ""
+                  Write-Host "🔧 LINUX KOMUTLARI:"
+                  Write-Host "   xfreerdp /v:$host`:$port /u:runneradmin /p:Pass123! /cert-ignore"
+                  Write-Host "   rdesktop -u runneradmin -p Pass123! $host`:$port"
+                  Write-Host ""
+                  Write-Host "📱 WINDOWS/MAC:"
+                  Write-Host "   Microsoft Remote Desktop uygulamasını kullanın"
+                  Write-Host "=================================================="
+                  
+                  $tunnelFound = $true
+                  break
+                }
               }
+            } catch {
+              Write-Host "API denemesi $i başarısız, tekrar deneniyor..."
             }
-            Start-Sleep -Seconds 2
+            
+            Start-Sleep -Seconds 3
           }
           
-          if ($tunnelUrl) {
-            echo "url=$tunnelUrl" >> $env:GITHUB_OUTPUT
-            Write-Host "✅ Tunnel URL: $tunnelUrl"
-          } else {
-            Write-Host "❌ Tunnel URL bulunamadı"
+          if (-not $tunnelFound) {
+            Write-Host "❌ Tunnel bilgisi alınamadı. Manuel kontrol için:"
+            Write-Host "Ngrok web arayüzü: http://localhost:4040"
           }
 
-      - name: Show Connection Info
-        shell: pwsh
-        run: |
-          $tunnelUrl = "${{ steps.tunnel.outputs.url }}"
-          
-          Write-Host ""
-          Write-Host "=================================================="
-          Write-Host "🖥️ WINDOWS DESKTOP ERİŞİMİ"
-          Write-Host "=================================================="
-          Write-Host "🌐 Web Arayüzü: $tunnelUrl"
-          Write-Host "👤 Kullanıcı: runneradmin"
-          Write-Host "🔐 Şifre: $env:RDP_PASSWORD"
-          Write-Host ""
-          Write-Host "📱 RDP İstemcisi için:"
-          if ($tunnelUrl) {
-            $host = $tunnelUrl -replace 'https://', '' -replace '\.trycloudflare\.com.*', '.trycloudflare.com'
-            Write-Host "   Host: $host"
-            Write-Host "   Port: 3389"
-          }
-          Write-Host "   User: runneradmin"
-          Write-Host "   Pass: $env:RDP_PASSWORD"
-          Write-Host ""
-          Write-Host "🔧 Linux Komutları:"
-          if ($tunnelUrl) {
-            $host = $tunnelUrl -replace 'https://', '' -replace '\.trycloudflare\.com.*', '.trycloudflare.com'
-            Write-Host "   xfreerdp /v:$host /u:runneradmin /p:$env:RDP_PASSWORD /cert-ignore"
-            Write-Host "   rdesktop -u runneradmin -p $env:RDP_PASSWORD $host"
-          }
-          Write-Host "=================================================="
-          
-          # GitHub Summary'ye ekle
-          @"
-          ## 🖥️ Windows Desktop Erişimi
-          
-          **🌐 Web Arayüzü:** $tunnelUrl
-          
-          **📍 RDP Bağlantı Bilgileri:**
-          - **Kullanıcı:** runneradmin  
-          - **Şifre:** $env:RDP_PASSWORD
-          - **Port:** 3389
-          
-          **📱 Mobil/Tablet:** Microsoft Remote Desktop uygulamasını kullanın
-          
-          **⏰ Not:** Bu oturum workflow bitene kadar (max 6 saat) açık kalır.
-          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-
-      - name: Keep session alive
+      - name: Keep Session Alive
         shell: pwsh
         run: |
           Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
@@ -282,11 +112,21 @@ jobs:
             
             if ($i % 60 -eq 0) {  # Her 30 dakikada
               $elapsed = $i / 2
-              Write-Host "⏱️ Geçen süre: $elapsed dakika - Desktop aktif"
+              Write-Host "⏱️ Geçen süre: $elapsed dakika - RDP aktif"
               
-              # Aktif job sayısını kontrol et
-              $jobs = Get-Job | Where-Object { $_.State -eq 'Running' }
-              Write-Host "🔧 Aktif servis sayısı: $($jobs.Count)"
+              # Ngrok durumunu kontrol et
+              try {
+                $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -Method Get -TimeoutSec 3 -ErrorAction SilentlyContinue
+                if ($response -and $response.tunnels) {
+                  $tunnel = $response.tunnels | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
+                  if ($tunnel) {
+                    $publicUrl = $tunnel.public_url -replace "tcp://", ""
+                    Write-Host "📍 RDP adresi: $publicUrl"
+                  }
+                }
+              } catch {
+                Write-Host "⚠️ Ngrok durumu kontrol edilemiyor"
+              }
             }
           }
           
