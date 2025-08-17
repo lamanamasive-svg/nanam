@@ -1,4 +1,4 @@
-name: Windows RDP with Ngrok Direct
+name: Windows RDP with Ngrok
 
 on:
   workflow_dispatch:
@@ -33,164 +33,104 @@ jobs:
           & .\ngrok.exe config add-authtoken "2h77XN9Ic3xIZXMxvCkkVigsbqm_6ZHkqfguxg8V1GoGe7WuP"
           Write-Host "✅ Auth token yapılandırıldı"
 
-      - name: Start Ngrok with Direct Output
+      - name: Start Ngrok and Display Connection
         shell: pwsh
         run: |
-          Write-Host "🚀 Ngrok başlatılıyor ve bağlantı bilgisi alınıyor..."
+          Write-Host "🚀 Ngrok başlatılıyor..."
           
-          # Ngrok'u arka planda başlat ve çıktıyı yakala
+          # Ngrok'u başlat ve çıktıyı yakala
           $process = Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -PassThru -RedirectStandardOutput "ngrok_output.txt" -RedirectStandardError "ngrok_error.txt" -WindowStyle Hidden
           
           Write-Host "⏳ Ngrok başlatılıyor, lütfen bekleyin..."
-          Start-Sleep -Seconds 30
+          Start-Sleep -Seconds 20
           
           # Çıktıyı kontrol et
-          Write-Host ""
-          Write-Host "📄 Ngrok Çıktısı:"
           if (Test-Path "ngrok_output.txt") {
             $output = Get-Content "ngrok_output.txt" -Raw
-            Write-Host $output
             
-            # URL'i parse et
+            # URL'i parse et - düzeltilmiş regex
             if ($output -match 'url=tcp://([^:]+):(\d+)') {
-              $host = $matches[1]
-              $port = $matches[2]
+              $ngrokHost = $matches[1]
+              $ngrokPort = $matches[2]
               
               Write-Host ""
               Write-Host "=================================================="
               Write-Host "🖥️ RDP BAĞLANTI BİLGİLERİ"
               Write-Host "=================================================="
-              Write-Host "📍 Host: $host"
-              Write-Host "🔌 Port: $port"
+              Write-Host "📍 Host: $ngrokHost"
+              Write-Host "🔌 Port: $ngrokPort"
               Write-Host "👤 Kullanıcı: runneradmin"
               Write-Host "🔐 Şifre: Pass123!"
               Write-Host ""
-              Write-Host "🔧 BAĞLANTI KOMUTLARI:"
-              Write-Host "   mstsc /v:$host`:$port"
-              Write-Host "   xfreerdp /v:$host`:$port /u:runneradmin /p:Pass123! /cert-ignore"
-              Write-Host "   rdesktop -u runneradmin -p Pass123! $host`:$port"
-              Write-Host "=================================================="
-            }
-          }
-          
-          # Error çıktısını kontrol et
-          if (Test-Path "ngrok_error.txt") {
-            $error_content = Get-Content "ngrok_error.txt" -Raw
-            if ($error_content) {
+              Write-Host "🔧 WINDOWS RDP:"
+              Write-Host "   mstsc /v:${ngrokHost}:${ngrokPort}"
               Write-Host ""
-              Write-Host "📛 Ngrok Error:"
-              Write-Host $error_content
+              Write-Host "🐧 LINUX (Remmina):"
+              Write-Host "   Protokol: RDP"
+              Write-Host "   Sunucu: $ngrokHost"
+              Write-Host "   Port: $ngrokPort"
+              Write-Host "   Kullanıcı: runneradmin"
+              Write-Host "   Şifre: Pass123!"
+              Write-Host ""
+              Write-Host "🔧 LINUX (Terminal):"
+              Write-Host "   xfreerdp /v:${ngrokHost}:${ngrokPort} /u:runneradmin /p:Pass123! /cert-ignore /sec:rdp"
+              Write-Host "   rdesktop -u runneradmin -p Pass123! ${ngrokHost}:${ngrokPort}"
+              Write-Host ""
+              Write-Host "📱 MOBİL/TABLET:"
+              Write-Host "   Microsoft Remote Desktop uygulamasını kullanın"
+              Write-Host "   PC adı: ${ngrokHost}:${ngrokPort}"
+              Write-Host "=================================================="
+              
+              # GitHub Summary'e ekle
+              @"
+              ## 🖥️ RDP Bağlantı Bilgileri
+              
+              **Host:** ``$ngrokHost``  
+              **Port:** ``$ngrokPort``  
+              **Kullanıcı:** ``runneradmin``  
+              **Şifre:** ``Pass123!``
+              
+              ### Bağlantı Komutları:
+              
+              **Windows:**
+              ```
+              mstsc /v:${ngrokHost}:${ngrokPort}
+              ```
+              
+              **Linux:**
+              ```
+              xfreerdp /v:${ngrokHost}:${ngrokPort} /u:runneradmin /p:Pass123! /cert-ignore
+              ```
+              "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+              
+            } else {
+              Write-Host "⚠️ URL parse edilemedi. Ngrok çıktısı:"
+              Write-Host $output
             }
           }
-          
-          # Alternatif: API'yi tekrar dene (daha uzun bekleme ile)
-          Write-Host ""
-          Write-Host "🔍 API üzerinden kontrol ediliyor..."
-          Start-Sleep -Seconds 10
-          
-          $maxRetries = 5
-          for ($i = 1; $i -le $maxRetries; $i++) {
-            try {
-              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 10
-              if ($response.tunnels -and $response.tunnels.Count -gt 0) {
-                $tunnel = $response.tunnels[0]
-                $url = $tunnel.public_url
-                
-                if ($url -match "tcp://(.+):(\d+)") {
-                  $host = $matches[1]
-                  $port = $matches[2]
-                  
-                  Write-Host ""
-                  Write-Host "✅ API'den alınan bağlantı bilgileri:"
-                  Write-Host "Host: $host"
-                  Write-Host "Port: $port"
-                  break
-                }
-              }
-            } catch {
-              Write-Host "API denemesi $i/$maxRetries başarısız"
-              if ($i -lt $maxRetries) {
-                Start-Sleep -Seconds 5
-              }
-            }
-          }
-          
-          # Son kontrol: Process çalışıyor mu?
-          Write-Host ""
-          Write-Host "📊 Ngrok Process Durumu:"
-          $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
-          if ($ngrokProcess) {
-            Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
-          } else {
-            Write-Host "❌ Ngrok process bulunamadı!"
-          }
 
-      - name: Alternative - Try Ngrok HTTP Inspect
+      - name: Keep Session Alive
         shell: pwsh
         run: |
-          Write-Host ""
-          Write-Host "🌐 Ngrok Web Arayüzü Bilgileri:"
-          Write-Host "Tarayıcıda açın: http://localhost:4040"
-          Write-Host "Status sayfası: http://localhost:4040/status"
-          Write-Host "Inspect sayfası: http://localhost:4040/inspect/http"
-          Write-Host ""
+          Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
+          Write-Host "⏰ Başlangıç: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
           
-          # Web sayfasından bilgi almayı dene
-          try {
-            $webContent = Invoke-WebRequest -Uri "http://localhost:4040" -UseBasicParsing -TimeoutSec 10
-            if ($webContent.Content -match 'tcp://([a-zA-Z0-9.-]+\.(tcp\.)?ngrok[.-][a-zA-Z0-9.-]+):(\d+)') {
-              Write-Host "✅ Web sayfasından bulunan URL: $($matches[0])"
-            }
-          } catch {
-            Write-Host "Web sayfası okunamadı"
-          }
-
-      - name: Display Final Instructions
-        shell: pwsh
-        run: |
-          Write-Host ""
-          Write-Host "=================================================="
-          Write-Host "📋 ÖZET"
-          Write-Host "=================================================="
-          Write-Host "1. Yukarıdaki çıktılarda tcp://xxx.ngrok.io:PORT"
-          Write-Host "   formatında bir adres arayın"
-          Write-Host ""
-          Write-Host "2. RDP bağlantısı için:"
-          Write-Host "   • Host: xxx.ngrok.io"
-          Write-Host "   • Port: gösterilen port numarası"
-          Write-Host "   • Kullanıcı: runneradmin"
-          Write-Host "   • Şifre: Pass123!"
-          Write-Host ""
-          Write-Host "3. Eğer URL bulunamazsa:"
-          Write-Host "   • http://localhost:4040 adresini kontrol edin"
-          Write-Host "   • Veya ngrok_output.txt dosyasını inceleyin"
-          Write-Host "=================================================="
-
-      - name: Keep Alive
-        shell: pwsh
-        run: |
-          Write-Host "🕐 Oturum 6 saat açık kalacak..."
-          
-          # İlk 5 dakika boyunca her dakika kontrol et
-          for ($i = 1; $i -le 5; $i++) {
-            Start-Sleep -Seconds 60
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Kontrol $i/5..."
+          # Her 30 dakikada bir kontrol
+          for ($i = 1; $i -le 720; $i++) {
+            Start-Sleep -Seconds 30
             
-            try {
-              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5 -ErrorAction SilentlyContinue
-              if ($response.tunnels -and $response.tunnels.Count -gt 0) {
-                $tunnel = $response.tunnels[0]
-                Write-Host "✅ Ngrok aktif: $($tunnel.public_url)"
-                break
+            if ($i % 60 -eq 0) {
+              $elapsed = $i / 2
+              Write-Host "⏱️ Geçen süre: $elapsed dakika - RDP aktif"
+              
+              # Process kontrolü
+              $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+              if ($ngrokProcess) {
+                Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
+              } else {
+                Write-Host "❌ Ngrok process bulunamadı!"
               }
-            } catch {
-              Write-Host "API hala hazır değil..."
             }
           }
           
-          # Kalan süre için 30 dakikada bir kontrol
-          $endTime = (Get-Date).AddHours(6)
-          while ((Get-Date) -lt $endTime) {
-            Start-Sleep -Seconds 1800
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sistem aktif"
-          }
+          Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
