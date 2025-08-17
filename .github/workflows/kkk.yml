@@ -1,4 +1,4 @@
-name: Windows
+name: Windows RDP with Ngrok Direct
 
 on:
   workflow_dispatch:
@@ -33,111 +33,164 @@ jobs:
           & .\ngrok.exe config add-authtoken "2h77XN9Ic3xIZXMxvCkkVigsbqm_6ZHkqfguxg8V1GoGe7WuP"
           Write-Host "✅ Auth token yapılandırıldı"
 
-      - name: Start Ngrok and Display Connection
+      - name: Start Ngrok with Direct Output
         shell: pwsh
         run: |
-          Write-Host "🚀 Ngrok başlatılıyor..."
+          Write-Host "🚀 Ngrok başlatılıyor ve bağlantı bilgisi alınıyor..."
           
-          # Ngrok'u başlat ve çıktıyı dosyaya yaz
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -RedirectStandardOutput "ngrok.txt" -WindowStyle Hidden
+          # Ngrok'u arka planda başlat ve çıktıyı yakala
+          $process = Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -PassThru -RedirectStandardOutput "ngrok_output.txt" -RedirectStandardError "ngrok_error.txt" -WindowStyle Hidden
           
-          # Ngrok'un başlaması için bekle
-          Start-Sleep -Seconds 15
+          Write-Host "⏳ Ngrok başlatılıyor, lütfen bekleyin..."
+          Start-Sleep -Seconds 30
           
-          # Çıktıyı oku
-          if (Test-Path "ngrok.txt") {
-            $ngrokOutput = Get-Content "ngrok.txt" -Raw
-            Write-Host "Ngrok çıktısı:"
-            Write-Host $ngrokOutput
+          # Çıktıyı kontrol et
+          Write-Host ""
+          Write-Host "📄 Ngrok Çıktısı:"
+          if (Test-Path "ngrok_output.txt") {
+            $output = Get-Content "ngrok_output.txt" -Raw
+            Write-Host $output
+            
+            # URL'i parse et
+            if ($output -match 'url=tcp://([^:]+):(\d+)') {
+              $host = $matches[1]
+              $port = $matches[2]
+              
+              Write-Host ""
+              Write-Host "=================================================="
+              Write-Host "🖥️ RDP BAĞLANTI BİLGİLERİ"
+              Write-Host "=================================================="
+              Write-Host "📍 Host: $host"
+              Write-Host "🔌 Port: $port"
+              Write-Host "👤 Kullanıcı: runneradmin"
+              Write-Host "🔐 Şifre: Pass123!"
+              Write-Host ""
+              Write-Host "🔧 BAĞLANTI KOMUTLARI:"
+              Write-Host "   mstsc /v:$host`:$port"
+              Write-Host "   xfreerdp /v:$host`:$port /u:runneradmin /p:Pass123! /cert-ignore"
+              Write-Host "   rdesktop -u runneradmin -p Pass123! $host`:$port"
+              Write-Host "=================================================="
+            }
           }
           
-          # Alternatif yöntem: Ngrok API'yi dene
-          Write-Host ""
-          Write-Host "🔍 Bağlantı bilgileri alınıyor..."
-          Start-Sleep -Seconds 5
+          # Error çıktısını kontrol et
+          if (Test-Path "ngrok_error.txt") {
+            $error_content = Get-Content "ngrok_error.txt" -Raw
+            if ($error_content) {
+              Write-Host ""
+              Write-Host "📛 Ngrok Error:"
+              Write-Host $error_content
+            }
+          }
           
-          try {
-            # Ngrok web arayüzünden bilgi al
-            $response = Invoke-WebRequest -Uri "http://localhost:4040/status" -UseBasicParsing -TimeoutSec 10
-            Write-Host "Ngrok Status:"
-            Write-Host $response.Content
-            
-            # API'den tunnel bilgisini al
-            $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 10
-            if ($tunnels.tunnels) {
-              $tunnel = $tunnels.tunnels[0]
-              $url = $tunnel.public_url
-              
-              # TCP URL'ini parse et
-              if ($url -match "tcp://(.+):(\d+)") {
-                $host = $matches[1]
-                $port = $matches[2]
+          # Alternatif: API'yi tekrar dene (daha uzun bekleme ile)
+          Write-Host ""
+          Write-Host "🔍 API üzerinden kontrol ediliyor..."
+          Start-Sleep -Seconds 10
+          
+          $maxRetries = 5
+          for ($i = 1; $i -le $maxRetries; $i++) {
+            try {
+              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 10
+              if ($response.tunnels -and $response.tunnels.Count -gt 0) {
+                $tunnel = $response.tunnels[0]
+                $url = $tunnel.public_url
                 
-                Write-Host ""
-                Write-Host "=================================================="
-                Write-Host "🖥️ RDP BAĞLANTI BİLGİLERİ"
-                Write-Host "=================================================="
-                Write-Host "📍 Host: $host"
-                Write-Host "🔌 Port: $port"
-                Write-Host "👤 Kullanıcı: runneradmin"
-                Write-Host "🔐 Şifre: Pass123!"
-                Write-Host ""
-                Write-Host "🔧 BAĞLANTI KOMUTLARI:"
-                Write-Host "   mstsc /v:$host`:$port"
-                Write-Host "   xfreerdp /v:$host`:$port /u:runneradmin /p:Pass123! /cert-ignore"
-                Write-Host "   rdesktop -u runneradmin -p Pass123! $host`:$port"
-                Write-Host "=================================================="
+                if ($url -match "tcp://(.+):(\d+)") {
+                  $host = $matches[1]
+                  $port = $matches[2]
+                  
+                  Write-Host ""
+                  Write-Host "✅ API'den alınan bağlantı bilgileri:"
+                  Write-Host "Host: $host"
+                  Write-Host "Port: $port"
+                  break
+                }
+              }
+            } catch {
+              Write-Host "API denemesi $i/$maxRetries başarısız"
+              if ($i -lt $maxRetries) {
+                Start-Sleep -Seconds 5
               }
             }
-          } catch {
-            Write-Host "⚠️ Otomatik bilgi alınamadı. Manuel kontrol:"
-            Write-Host ""
-            Write-Host "1. Tarayıcıda açın: http://localhost:4040"
-            Write-Host "2. Gösterilen tcp://xxx.ngrok.io:PORT adresini kullanın"
-            Write-Host ""
-            Write-Host "RDP Bilgileri:"
-            Write-Host "Kullanıcı: runneradmin"
-            Write-Host "Şifre: Pass123!"
           }
           
-          # Son çare: Process çıktısını kontrol et
+          # Son kontrol: Process çalışıyor mu?
           Write-Host ""
-          Write-Host "📋 Ngrok Process Kontrolü:"
-          Get-Process -Name "ngrok" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
-          
-          # Alternatif log konumu
-          $ngrokLog = "$env:LOCALAPPDATA\ngrok\ngrok.log"
-          if (Test-Path $ngrokLog) {
-            Write-Host ""
-            Write-Host "📄 Ngrok Log (son 20 satır):"
-            Get-Content $ngrokLog -Tail 20
+          Write-Host "📊 Ngrok Process Durumu:"
+          $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+          if ($ngrokProcess) {
+            Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
+          } else {
+            Write-Host "❌ Ngrok process bulunamadı!"
           }
 
-      - name: Keep Session Alive
+      - name: Alternative - Try Ngrok HTTP Inspect
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "🌐 Ngrok Web Arayüzü Bilgileri:"
+          Write-Host "Tarayıcıda açın: http://localhost:4040"
+          Write-Host "Status sayfası: http://localhost:4040/status"
+          Write-Host "Inspect sayfası: http://localhost:4040/inspect/http"
+          Write-Host ""
+          
+          # Web sayfasından bilgi almayı dene
+          try {
+            $webContent = Invoke-WebRequest -Uri "http://localhost:4040" -UseBasicParsing -TimeoutSec 10
+            if ($webContent.Content -match 'tcp://([a-zA-Z0-9.-]+\.(tcp\.)?ngrok[.-][a-zA-Z0-9.-]+):(\d+)') {
+              Write-Host "✅ Web sayfasından bulunan URL: $($matches[0])"
+            }
+          } catch {
+            Write-Host "Web sayfası okunamadı"
+          }
+
+      - name: Display Final Instructions
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "=================================================="
+          Write-Host "📋 ÖZET"
+          Write-Host "=================================================="
+          Write-Host "1. Yukarıdaki çıktılarda tcp://xxx.ngrok.io:PORT"
+          Write-Host "   formatında bir adres arayın"
+          Write-Host ""
+          Write-Host "2. RDP bağlantısı için:"
+          Write-Host "   • Host: xxx.ngrok.io"
+          Write-Host "   • Port: gösterilen port numarası"
+          Write-Host "   • Kullanıcı: runneradmin"
+          Write-Host "   • Şifre: Pass123!"
+          Write-Host ""
+          Write-Host "3. Eğer URL bulunamazsa:"
+          Write-Host "   • http://localhost:4040 adresini kontrol edin"
+          Write-Host "   • Veya ngrok_output.txt dosyasını inceleyin"
+          Write-Host "=================================================="
+
+      - name: Keep Alive
         shell: pwsh
         run: |
           Write-Host "🕐 Oturum 6 saat açık kalacak..."
-          Write-Host ""
-          Write-Host "ℹ️ SORUN GİDERME:"
-          Write-Host "1. Workflow çıktısında tcp://xxx.ngrok.io:PORT formatında bir adres arayın"
-          Write-Host "2. Bu adresi RDP istemcinizde kullanın"
-          Write-Host "3. Kullanıcı: runneradmin, Şifre: Pass123!"
-          Write-Host ""
           
-          # Her 30 dakikada durum kontrolü
-          $startTime = Get-Date
-          while ((Get-Date) -lt $startTime.AddHours(6)) {
-            # Ngrok durumunu kontrol et
+          # İlk 5 dakika boyunca her dakika kontrol et
+          for ($i = 1; $i -le 5; $i++) {
+            Start-Sleep -Seconds 60
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Kontrol $i/5..."
+            
             try {
-              $status = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5 -ErrorAction SilentlyContinue
-              if ($status.tunnels) {
-                $tunnel = $status.tunnels[0]
-                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ✅ Ngrok aktif: $($tunnel.public_url)"
+              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5 -ErrorAction SilentlyContinue
+              if ($response.tunnels -and $response.tunnels.Count -gt 0) {
+                $tunnel = $response.tunnels[0]
+                Write-Host "✅ Ngrok aktif: $($tunnel.public_url)"
+                break
               }
             } catch {
-              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ⚠️ Ngrok durumu kontrol edilemiyor"
+              Write-Host "API hala hazır değil..."
             }
-            
-            # 30 dakika bekle
+          }
+          
+          # Kalan süre için 30 dakikada bir kontrol
+          $endTime = (Get-Date).AddHours(6)
+          while ((Get-Date) -lt $endTime) {
             Start-Sleep -Seconds 1800
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Sistem aktif"
           }
