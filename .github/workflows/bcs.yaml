@@ -1,4 +1,4 @@
-name: RDP with Bore
+name: Bore
 
 on:
   workflow_dispatch:
@@ -31,13 +31,21 @@ jobs:
         Invoke-WebRequest -Uri 'https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-pc-windows-msvc.zip' -OutFile bore.zip
         
         # Arşivi çıkart
-        Expand-Archive bore.zip -DestinationPath . -Force
+        Expand-Archive bore.zip -DestinationPath ./bore_temp -Force
         
-        # bore.exe dosyasını bul ve ana dizine kopyala
-        $exe = Get-ChildItem -Recurse -File -Filter 'bore.exe' | Select-Object -First 1
+        # bore.exe dosyasını bul ve ana dizine taşı
+        $exe = Get-ChildItem -Path ./bore_temp -Recurse -File -Filter 'bore.exe' | Select-Object -First 1
         if ($exe) { 
-          Copy-Item $exe.FullName -Destination (Join-Path $PWD 'bore.exe') -Force 
+          $targetPath = Join-Path $PWD 'bore.exe'
+          # Hedef dosya varsa sil
+          if (Test-Path $targetPath) { Remove-Item $targetPath -Force }
+          # Dosyayı kopyala
+          Copy-Item $exe.FullName -Destination $targetPath -Force 
           Write-Host "Bore başarıyla indirildi ve hazırlandı"
+          
+          # Geçici klasörü temizle
+          Remove-Item ./bore_temp -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item bore.zip -Force -ErrorAction SilentlyContinue
         } else {
           throw "bore.exe bulunamadı"
         }
