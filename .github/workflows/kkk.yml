@@ -82,55 +82,14 @@ jobs:
               Write-Host "=================================================="
               
               # GitHub Summary'e ekle
-              @"
-              ## 🖥️ RDP Bağlantı Bilgileri
-              
-              **Host:** ``$ngrokHost``  
-              **Port:** ``$ngrokPort``  
-              **Kullanıcı:** ``runneradmin``  
-              **Şifre:** ``Pass123!``
-              
-              ### Bağlantı Komutları:
-              
-              **Windows:**
-              ```
-              mstsc /v:${ngrokHost}:${ngrokPort}
-              ```
-              
-              **Linux:**
-              ```
-              xfreerdp /v:${ngrokHost}:${ngrokPort} /u:runneradmin /p:Pass123! /cert-ignore
-              ```
-              "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-              
-            } else {
-              Write-Host "⚠️ URL parse edilemedi. Ngrok çıktısı:"
-              Write-Host $output
-            }
-          }
+@"
+## 🖥️ RDP Bağlantı Bilgileri
 
-      - name: Keep Session Alive
-        shell: pwsh
-        run: |
-          Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
-          Write-Host "⏰ Başlangıç: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-          
-          # Her 30 dakikada bir kontrol
-          for ($i = 1; $i -le 720; $i++) {
-            Start-Sleep -Seconds 30
-            
-            if ($i % 60 -eq 0) {
-              $elapsed = $i / 2
-              Write-Host "⏱️ Geçen süre: $elapsed dakika - RDP aktif"
-              
-              # Process kontrolü
-              $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
-              if ($ngrokProcess) {
-                Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
-              } else {
-                Write-Host "❌ Ngrok process bulunamadı!"
-              }
-            }
-          }
-          
-          Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+**Host:** ``$ngrokHost``  
+**Port:** ``$ngrokPort``  
+**Kullanıcı:** ``runneradmin``  
+**Şifre:** ``Pass123!``
+
+### Bağlantı Komutları:
+
+**Windows:**
