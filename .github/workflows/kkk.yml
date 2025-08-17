@@ -145,18 +145,142 @@ jobs:
                     
                     # GitHub Summary'e yaz
                     $summaryContent = @"
-## 🖥️ High Performance RDP Bağlantı Bilgileri
+          ## 🖥️ High Performance RDP Bağlantı Bilgileri
+          
+          **🚀 Performans Özellikleri:**
+          - **CPU:** 32 Çekirdek
+          - **RAM:** 64 GB
+          - **Performans Modu:** Yüksek
+          
+          **Host:** ``$ngrokHost``  
+          **Port:** ``$ngrokPort``  
+          **Kullanıcı:** ``runneradmin``  
+          **Şifre:** ``Pass123!``
+          
+          ### Bağlantı Komutları:
+          
+          **Windows RDP:**
+          ``````
+          mstsc /v:${ngrokHost}:${ngrokPort}
+          ``````
+          
+          **Linux xfreerdp:**
+          ``````
+          xfreerdp /v:${ngrokHost}:${ngrokPort} /u:runneradmin /p:Pass123! /cert-ignore
+          ``````
+          
+          **Linux rdesktop:**
+          ``````
+          rdesktop -u runneradmin -p Pass123! ${ngrokHost}:${ngrokPort}
+          ``````
+          
+          **Remmina GUI:**
+          - Server: ``$ngrokHost``
+          - Port: ``$ngrokPort``
+          - Protocol: RDP
+          - Username: runneradmin
+          - Password: Pass123!
+          
+          ### ⚡ Performans Optimizasyonları Aktif:
+          - Yüksek performans güç planı
+          - CPU öncelik optimizasyonu
+          - Bellek yönetimi optimizasyonu
+          - RDP grafik performans ayarları
+          "@
+                    
+                    $summaryContent | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+                  }
+                }
+              }
+            } catch {
+              Write-Host "⚠️ API çağrısı başarısız: $($_.Exception.Message)"
+            }
+            
+            if (-not $tunnelFound) {
+              $retryCount++
+              Start-Sleep -Seconds 3
+            }
+          }
+          
+          if (-not $tunnelFound) {
+            Write-Host "❌ Ngrok tunnel bilgisi alınamadı!"
+            
+            # Process kontrolü
+            $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+            if ($ngrokProcess) {
+              Write-Host "✅ Ngrok process hala çalışıyor (PID: $($ngrokProcess.Id))"
+            } else {
+              Write-Host "❌ Ngrok process bulunamadı!"
+            }
+            
+            $errorSummary = @"
+          ## ❌ Ngrok Tunnel Hatası
+          
+          Ngrok tunnel başlatılamadı veya API'den bilgi alınamadı.
+          
+          **Olası Nedenler:**
+          - Auth token geçersiz
+          - Ngrok servis sorunu
+          - Ağ bağlantı problemi
+          
+          Lütfen workflow'u yeniden başlatın.
+          "@
+            
+            $errorSummary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+            exit 1
+          }
 
-**🚀 Performans Özellikleri:**
-- **CPU:** 32 Çekirdek
-- **RAM:** 64 GB
-- **Performans Modu:** Yüksek
-
-**Host:** ``$ngrokHost``  
-**Port:** ``$ngrokPort``  
-**Kullanıcı:** ``runneradmin``  
-**Şifre:** ``Pass123!``
-
-### Bağlantı Komutları:
-
-**Windows RDP:**
+      - name: Keep Session Alive with High Performance Monitoring
+        shell: pwsh
+        run: |
+          Write-Host "🕐 Yüksek Performanslı Oturum 6 saat boyunca açık tutulacak..."
+          Write-Host "⏰ Başlangıç: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+          Write-Host "⚡ Performans: 32 Çekirdek / 64GB RAM"
+          
+          # 6 saat = 360 dakika = 720 x 30 saniye
+          for ($i = 1; $i -le 720; $i++) {
+            Start-Sleep -Seconds 30
+            
+            # Her dakikada bir durum kontrolü
+            if ($i % 2 -eq 0) {
+              $elapsed = $i / 2
+              
+              # Her 10 dakikada bir detaylı log
+              if ($elapsed % 10 -eq 0) {
+                Write-Host "⏱️ Geçen süre: $elapsed dakika"
+                Write-Host "💾 RAM Kullanımı: $([math]::Round((Get-Counter '\Memory\Available MBytes').CounterSamples.CookedValue/1024, 2)) GB mevcut"
+                Write-Host "🔧 CPU Kullanımı: $([math]::Round((Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue, 2))%"
+                
+                # Ngrok process kontrolü
+                $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+                if ($ngrokProcess) {
+                  Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
+                  
+                  # Tunnel durumu kontrolü
+                  try {
+                    $apiResponse = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
+                    if ($apiResponse.tunnels -and $apiResponse.tunnels.Count -gt 0) {
+                      Write-Host "✅ Tunnel aktif"
+                    } else {
+                      Write-Host "⚠️ Tunnel bulunamadı"
+                    }
+                  } catch {
+                    Write-Host "⚠️ Tunnel API kontrolü başarısız"
+                  }
+                } else {
+                  Write-Host "❌ Ngrok process bulunamadı! Yeniden başlatılıyor..."
+                  
+                  # Ngrok'u yeniden başlat
+                  try {
+                    $newProcess = Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -PassThru -WindowStyle Hidden
+                    Write-Host "🔄 Ngrok yeniden başlatıldı (PID: $($newProcess.Id))"
+                    Start-Sleep -Seconds 10
+                  } catch {
+                    Write-Host "❌ Ngrok yeniden başlatılamadı: $($_.Exception.Message)"
+                  }
+                }
+              }
+            }
+          }
+          
+          Write-Host "⏰ Yüksek Performanslı Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
