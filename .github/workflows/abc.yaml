@@ -1,0 +1,38 @@
+name: RDP with Bore
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Enable RDP
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "Pass123!" -Force)
+    
+    - name: Download Bore
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-pc-windows-msvc.zip" -OutFile bore.zip
+        Expand-Archive bore.zip -DestinationPath .
+    
+    - name: Start Bore Tunnel
+      run: |
+        Start-Process -FilePath ".\bore.exe" -ArgumentList "local 3389 --to bore.pub" -RedirectStandardOutput bore_output.txt -NoNewWindow
+        Start-Sleep -Seconds 5
+        
+        $output = Get-Content bore_output.txt
+        Write-Host "========================================="
+        Write-Host "RDP BAĞLANTI BİLGİLERİ:"
+        Write-Host "========================================="
+        Write-Host $output
+        Write-Host ""
+        Write-Host "Kullanıcı: runneradmin"
+        Write-Host "Şifre: Pass123!"
+        Write-Host "========================================="
+    
+    - name: Keep Alive
+      run: Start-Sleep -Seconds 21600
