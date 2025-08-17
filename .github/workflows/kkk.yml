@@ -1,4 +1,4 @@
-name: Simple Windows RDP
+name: Windows RDP with Ngrok Auth
 
 on:
   workflow_dispatch:
@@ -15,15 +15,18 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
           Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
           Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText 'Pass123!' -Force)
-          
-          # RDP uyumluluk ayarları
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0
-          Restart-Service TermService -Force
-          
           Write-Host "✅ RDP etkinleştirildi"
 
-      - name: Download Ngrok
+      - name: Configure RDP for Better Compatibility
+        shell: pwsh
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fAllowSecProtocolNegotiation' -Value 0
+          Restart-Service TermService -Force
+          Write-Host "✅ RDP uyumluluk ayarları yapıldı"
+
+      - name: Download and Setup Ngrok
         shell: pwsh
         run: |
           Write-Host "📥 Ngrok indiriliyor..."
@@ -32,7 +35,14 @@ jobs:
           Remove-Item ngrok.zip -Force
           Write-Host "✅ Ngrok hazırlandı"
 
-      - name: Start Ngrok and Show Connection Info
+      - name: Configure Ngrok Auth Token
+        shell: pwsh
+        run: |
+          Write-Host "🔑 Ngrok auth token yapılandırılıyor..."
+          & .\ngrok.exe config add-authtoken "2h77XN9Ic3xIZXMxvCkkVigsbqm_6ZHkqfguxg8V1GoGe7WuP"
+          Write-Host "✅ Auth token yapılandırıldı"
+
+      - name: Start Ngrok Tunnel and Show Connection Info
         shell: pwsh
         run: |
           Write-Host "🚀 Ngrok TCP tüneli başlatılıyor..."
@@ -42,14 +52,14 @@ jobs:
             & .\ngrok.exe tcp 3389 --log stdout
           }
           
-          # 30 saniye bekle
-          Start-Sleep -Seconds 30
+          # 25 saniye bekle
+          Start-Sleep -Seconds 25
           
           # Tunnel bilgisini al
           $tunnelFound = $false
-          for ($i = 1; $i -le 20; $i++) {
+          for ($i = 1; $i -le 15; $i++) {
             try {
-              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -Method Get -TimeoutSec 3
+              $response = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -Method Get -TimeoutSec 5
               
               if ($response.tunnels -and $response.tunnels.Count -gt 0) {
                 $tunnel = $response.tunnels | Where-Object { $_.proto -eq "tcp" } | Select-Object -First 1
@@ -75,14 +85,39 @@ jobs:
                   Write-Host "   • Port: $port"
                   Write-Host "   • Kullanıcı: runneradmin"
                   Write-Host "   • Şifre: Pass123!"
+                  Write-Host "   • Güvenlik: RDP"
+                  Write-Host "   • Disable encryption: ✓"
+                  Write-Host "   • Ignore certificate: ✓"
                   Write-Host ""
                   Write-Host "🔧 LINUX KOMUTLARI:"
-                  Write-Host "   xfreerdp /v:$host`:$port /u:runneradmin /p:Pass123! /cert-ignore"
+                  Write-Host "   xfreerdp /v:$host`:$port /u:runneradmin /p:Pass123! /cert-ignore /sec:rdp"
                   Write-Host "   rdesktop -u runneradmin -p Pass123! $host`:$port"
                   Write-Host ""
-                  Write-Host "📱 WINDOWS/MAC:"
+                  Write-Host "📱 WINDOWS/MAC/MOBILE:"
                   Write-Host "   Microsoft Remote Desktop uygulamasını kullanın"
+                  Write-Host ""
+                  Write-Host "🔍 BAĞLANTI TESTİ:"
+                  Write-Host "   telnet $host $port"
                   Write-Host "=================================================="
+                  
+                  # Bağlantı testi
+                  Write-Host ""
+                  Write-Host "🔍 Port erişilebilirlik testi yapılıyor..."
+                  try {
+                    $tcpClient = New-Object System.Net.Sockets.TcpClient
+                    $connect = $tcpClient.BeginConnect($host, $port, $null, $null)
+                    $wait = $connect.AsyncWaitHandle.WaitOne(5000, $false)
+                    
+                    if ($wait -and $tcpClient.Connected) {
+                      Write-Host "✅ Port $port erişilebilir - RDP bağlantısı hazır!"
+                      $tcpClient.Close()
+                    } else {
+                      Write-Host "⚠️ Port erişim testi başarısız"
+                      $tcpClient.Close()
+                    }
+                  } catch {
+                    Write-Host "⚠️ Bağlantı testi hatası: $($_.Exception.Message)"
+                  }
                   
                   $tunnelFound = $true
                   break
@@ -96,11 +131,18 @@ jobs:
           }
           
           if (-not $tunnelFound) {
-            Write-Host "❌ Tunnel bilgisi alınamadı. Manuel kontrol için:"
-            Write-Host "Ngrok web arayüzü: http://localhost:4040"
+            Write-Host "❌ Tunnel bilgisi alınamadı. Job çıktısını kontrol ediliyor..."
+            $jobOutput = Receive-Job -Job $job -Keep
+            if ($jobOutput) {
+              Write-Host "=== NGROK ÇIKTISI ==="
+              $jobOutput | ForEach-Object { Write-Host $_ }
+              Write-Host "===================="
+            }
+            Write-Host ""
+            Write-Host "🌐 Manuel kontrol için Ngrok web arayüzü: http://localhost:4040"
           }
 
-      - name: Keep Session Alive
+      - name: Keep Session Alive with Monitoring
         shell: pwsh
         run: |
           Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
@@ -122,6 +164,7 @@ jobs:
                   if ($tunnel) {
                     $publicUrl = $tunnel.public_url -replace "tcp://", ""
                     Write-Host "📍 RDP adresi: $publicUrl"
+                    Write-Host "🌐 Web panel: http://localhost:4040"
                   }
                 }
               } catch {
