@@ -1,7 +1,12 @@
-name: RDP with Bore
+name: RDP with Cloudflare Tunnel
 
 on:
   workflow_dispatch:
+    inputs:
+      cloudflare_token:
+        description: 'Cloudflare API Token'
+        required: true
+        type: string
 
 jobs:
   rdp:
@@ -15,102 +20,181 @@ jobs:
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
         Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
         Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText 'Pass123!' -Force)
-        Write-Host "RDP başarıyla etkinleştirildi"
+        Write-Host "✅ RDP etkinleştirildi"
 
-    - name: Configure RDP for Linux Clients
+    - name: Configure RDP for Better Compatibility
       shell: pwsh
       run: |
-        # Linux RDP istemcileri için uyumluluk ayarları
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fAllowSecProtocolNegotiation' -Value 0
-        
-        # RDP servisini yeniden başlat
         Restart-Service TermService -Force
-        Write-Host "Linux uyumluluğu için RDP yapılandırıldı"
+        Write-Host "✅ RDP uyumluluk ayarları yapıldı"
 
-    - name: Download and Extract Bore
+    - name: Download and Install Cloudflared
       shell: pwsh
       run: |
-        Write-Host "Bore indiriliyor..."
-        Invoke-WebRequest -Uri 'https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-pc-windows-msvc.zip' -OutFile bore.zip
-        Expand-Archive bore.zip -DestinationPath ./bore_temp -Force
+        Write-Host "📥 Cloudflared indiriliyor..."
+        $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+        Invoke-WebRequest -Uri $url -OutFile "cloudflared.exe"
         
-        $exe = Get-ChildItem -Path ./bore_temp -Recurse -File -Filter 'bore.exe' | Select-Object -First 1
-        if ($exe) { 
-          $targetPath = Join-Path $PWD 'bore.exe'
-          if (Test-Path $targetPath) { Remove-Item $targetPath -Force }
-          Copy-Item $exe.FullName -Destination $targetPath -Force 
-          Write-Host "Bore başarıyla hazırlandı"
-          Remove-Item ./bore_temp -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item bore.zip -Force -ErrorAction SilentlyContinue
-        } else {
-          throw "bore.exe bulunamadı"
-        }
+        # Cloudflared versiyonunu kontrol et
+        $version = & .\cloudflared.exe --version
+        Write-Host "✅ Cloudflared yüklendi: $version"
 
-    - name: Start Bore Tunnel and Display Connection Info
+    - name: Create Cloudflare Tunnel
       shell: pwsh
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cloudflare_token }}
       run: |
-        $outputFile = Join-Path $PWD 'bore_output.txt'
-        $errorFile = Join-Path $PWD 'bore_error.txt'
+        Write-Host "🔧 Cloudflare Tunnel oluşturuluyor..."
         
-        if (Test-Path $outputFile) { Remove-Item $outputFile -Force }
-        if (Test-Path $errorFile) { Remove-Item $errorFile -Force }
+        # Tunnel oluştur
+        $tunnelName = "github-rdp-$(Get-Random -Minimum 1000 -Maximum 9999)"
+        Write-Host "Tunnel adı: $tunnelName"
         
-        Write-Host "Bore tüneli başlatılıyor..."
-        $process = Start-Process -FilePath '.\bore.exe' -ArgumentList 'local 3389 --to bore.pub' -RedirectStandardOutput $outputFile -RedirectStandardError $errorFile -WindowStyle Hidden -PassThru
+        $createOutput = & .\cloudflared.exe tunnel create $tunnelName 2>&1
+        Write-Host "Tunnel oluşturma çıktısı:"
+        $createOutput | ForEach-Object { Write-Host $_ }
         
-        $port = $null
-        $maxWaitTime = 120
-        $startTime = Get-Date
-        
-        while (((Get-Date) - $startTime).TotalSeconds -lt $maxWaitTime) {
-          $content = ""
-          if (Test-Path $outputFile) {
-            $content += Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
+        # Tunnel ID'sini çıkar
+        $tunnelId = $null
+        foreach ($line in $createOutput) {
+          if ($line -match 'Created tunnel .* with id ([a-f0-9-]+)') {
+            $tunnelId = $matches[1]
+            break
           }
-          if (Test-Path $errorFile) {
-            $content += Get-Content $errorFile -Raw -ErrorAction SilentlyContinue
-          }
-          
-          if ($content) {
-            if ($content -match 'bore\.pub:(\d+)') { 
-              $port = $matches[1]; break 
-            }
-            if ($content -match 'remote port(?:\s+is|\s+assigned\s+as|\s+assigned|:)?\s*(\d+)') { 
-              $port = $matches[1]; break 
-            }
-          }
-          Start-Sleep -Seconds 2
         }
         
-        if (-not $port) {
-          Write-Host "HATA: Bore portu tespit edilemedi!"
-          throw "Bore portu bulunamadı"
+        if (-not $tunnelId) {
+          throw "Tunnel ID bulunamadı. Çıktı: $($createOutput -join "`n")"
         }
         
-        $fullAddress = "bore.pub:$port"
+        Write-Host "✅ Tunnel ID: $tunnelId"
+        
+        # Config dosyası oluştur
+        $configContent = @"
+tunnel: $tunnelId
+credentials-file: $env:USERPROFILE\.cloudflared\$tunnelId.json
+
+ingress:
+  - hostname: $tunnelName.trycloudflare.com
+    service: rdp://localhost:3389
+  - service: http_status:404
+"@
+        
+        $configDir = "$env:USERPROFILE\.cloudflared"
+        if (-not (Test-Path $configDir)) {
+          New-Item -ItemType Directory -Path $configDir -Force
+        }
+        
+        $configPath = "$configDir\config.yml"
+        $configContent | Out-File -FilePath $configPath -Encoding UTF8
+        Write-Host "✅ Config dosyası oluşturuldu: $configPath"
+        
+        # Tunnel'ı DNS'e route et
+        Write-Host "🌐 DNS routing yapılıyor..."
+        $routeOutput = & .\cloudflared.exe tunnel route dns $tunnelId $tunnelName.trycloudflare.com 2>&1
+        $routeOutput | ForEach-Object { Write-Host $_ }
+        
+        # Global değişken olarak kaydet
+        echo "TUNNEL_NAME=$tunnelName" >> $env:GITHUB_ENV
+        echo "TUNNEL_ID=$tunnelId" >> $env:GITHUB_ENV
+
+    - name: Start Cloudflare Tunnel
+      shell: pwsh
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cloudflare_token }}
+      run: |
+        Write-Host "🚀 Cloudflare Tunnel başlatılıyor..."
+        
+        $tunnelName = $env:TUNNEL_NAME
+        $configPath = "$env:USERPROFILE\.cloudflared\config.yml"
+        
+        # Tunnel'ı arka planda başlat
+        $job = Start-Job -ScriptBlock {
+          param($cloudflaredPath, $configPath)
+          & $cloudflaredPath tunnel --config $configPath run 2>&1
+        } -ArgumentList (Resolve-Path .\cloudflared.exe), $configPath
+        
+        # 30 saniye bekle ve durumu kontrol et
+        Start-Sleep -Seconds 30
+        
+        $output = Receive-Job -Job $job -Keep
+        if ($output) {
+          Write-Host "=== CLOUDFLARE TUNNEL ÇIKTISI ==="
+          $output | ForEach-Object { Write-Host $_ }
+          Write-Host "================================"
+        }
+        
+        # Bağlantı bilgilerini göster
+        $rdpAddress = "$tunnelName.trycloudflare.com"
         Write-Host ""
         Write-Host "=================================================="
         Write-Host "🔗 RDP BAĞLANTI BİLGİLERİ"
         Write-Host "=================================================="
-        Write-Host "📍 Host: $fullAddress"
+        Write-Host "📍 Host: $rdpAddress"
         Write-Host "👤 User: runneradmin"
         Write-Host "🔐 Pass: Pass123!"
+        Write-Host "🔌 Port: 3389 (varsayılan)"
         Write-Host ""
-        Write-Host "🖥️  REMMINA AYARLARI:"
+        Write-Host "🖥️ REMMINA AYARLARI:"
         Write-Host "   • Protokol: RDP"
-        Write-Host "   • Sunucu: $fullAddress"
-        Write-Host "   • Güvenlik: RDP veya Any"
-        Write-Host "   • Disable encryption: ✓"
-        Write-Host "   • Ignore certificate: ✓"
+        Write-Host "   • Sunucu: $rdpAddress"
+        Write-Host "   • Port: 3389"
+        Write-Host "   • Kullanıcı: runneradmin"
+        Write-Host "   • Şifre: Pass123!"
         Write-Host ""
-        Write-Host "🔧 ALTERNATIF KOMUT:"
-        Write-Host "   xfreerdp /v:$fullAddress /u:runneradmin /p:Pass123! /cert-ignore /sec:rdp"
+        Write-Host "🔧 XFREERDP KOMUTU:"
+        Write-Host "   xfreerdp /v:$rdpAddress /u:runneradmin /p:Pass123! /cert-ignore"
+        Write-Host ""
+        Write-Host "🌐 WEB ERIŞIM:"
+        Write-Host "   https://$rdpAddress (Cloudflare Access ile)"
         Write-Host "=================================================="
 
-    - name: Keep Session Alive
+    - name: Keep Session Alive and Monitor
       shell: pwsh
       run: |
-        Write-Host "🕐 Oturum 6 saat açık kalacak..."
-        Start-Sleep -Seconds 21600
+        Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
+        Write-Host "⏰ Başlangıç: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        
+        # Her 10 dakikada durum kontrolü
+        for ($i = 1; $i -le 2160; $i++) {
+          Start-Sleep -Seconds 10
+          
+          if ($i % 60 -eq 0) {  # Her 10 dakikada
+            $elapsed = [math]::Round($i / 6, 1)
+            Write-Host "⏱️ Geçen süre: $elapsed dakika"
+            
+            # Cloudflared job durumunu kontrol et
+            $jobs = Get-Job | Where-Object { $_.State -eq 'Running' }
+            Write-Host "🔧 Aktif tunnel sayısı: $($jobs.Count)"
+            
+            # Son çıktıları göster
+            if ($jobs.Count -gt 0) {
+              $latestOutput = Receive-Job -Job $jobs[0] -Keep | Select-Object -Last 3
+              if ($latestOutput) {
+                Write-Host "📊 Son tunnel logları:"
+                $latestOutput | ForEach-Object { Write-Host "   $_" }
+              }
+            }
+          }
+        }
+        
+        Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+
+    - name: Cleanup Tunnel
+      if: always()
+      shell: pwsh
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ github.event.inputs.cloudflare_token }}
+      run: |
+        if ($env:TUNNEL_ID) {
+          Write-Host "🧹 Tunnel temizleniyor..."
+          try {
+            & .\cloudflared.exe tunnel delete $env:TUNNEL_ID --force
+            Write-Host "✅ Tunnel silindi"
+          } catch {
+            Write-Host "⚠️ Tunnel silme hatası: $($_.Exception.Message)"
+          }
+        }
