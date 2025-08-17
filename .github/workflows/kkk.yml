@@ -38,17 +38,14 @@ jobs:
         run: |
           Write-Host "🚀 Ngrok başlatılıyor..."
           
-          # Ngrok'u başlat ve çıktıyı yakala
           $process = Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -PassThru -RedirectStandardOutput "ngrok_output.txt" -RedirectStandardError "ngrok_error.txt" -WindowStyle Hidden
           
           Write-Host "⏳ Ngrok başlatılıyor, lütfen bekleyin..."
           Start-Sleep -Seconds 20
           
-          # Çıktıyı kontrol et
           if (Test-Path "ngrok_output.txt") {
             $output = Get-Content "ngrok_output.txt" -Raw
             
-            # URL'i parse et - düzeltilmiş regex
             if ($output -match 'url=tcp://([^:]+):(\d+)') {
               $ngrokHost = $matches[1]
               $ngrokPort = $matches[2]
@@ -81,15 +78,78 @@ jobs:
               Write-Host "   PC adı: ${ngrokHost}:${ngrokPort}"
               Write-Host "=================================================="
               
-              # GitHub Summary'e ekle
-@"
-## 🖥️ RDP Bağlantı Bilgileri
+              $summaryContent = @"
+          ## 🖥️ RDP Bağlantı Bilgileri
+          
+          **Host:** ``$ngrokHost``  
+          **Port:** ``$ngrokPort``  
+          **Kullanıcı:** ``runneradmin``  
+          **Şifre:** ``Pass123!``
+          
+          ### Bağlantı Komutları:
+          
+          **Windows:**
+          ``````
+          mstsc /v:${ngrokHost}:${ngrokPort}
+          ``````
+          
+          **Linux:**
+          ``````
+          xfreerdp /v:${ngrokHost}:${ngrokPort} /u:runneradmin /p:Pass123! /cert-ignore
+          ``````
+          "@
+              
+              $summaryContent | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+              
+            } else {
+              Write-Host "⚠️ URL parse edilemedi. Ngrok çıktısı:"
+              Write-Host $output
+              
+              $errorSummary = @"
+          ## ⚠️ Ngrok Bağlantı Hatası
+          
+          Ngrok URL'i parse edilemedi. Lütfen workflow loglarını kontrol edin.
+          
+          ### Debug Bilgileri:
+          ``````
+          $output
+          ``````
+          "@
+              
+              $errorSummary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+            }
+          } else {
+            Write-Host "❌ Ngrok output dosyası bulunamadı!"
+            
+            $noFileSummary = @"
+          ## ❌ Ngrok Başlatma Hatası
+          
+          Ngrok output dosyası oluşturulamadı. Workflow başarısız oldu.
+          "@
+            
+            $noFileSummary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
+          }
 
-**Host:** ``$ngrokHost``  
-**Port:** ``$ngrokPort``  
-**Kullanıcı:** ``runneradmin``  
-**Şifre:** ``Pass123!``
-
-### Bağlantı Komutları:
-
-**Windows:**
+      - name: Keep Session Alive
+        shell: pwsh
+        run: |
+          Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
+          Write-Host "⏰ Başlangıç: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+          
+          for ($i = 1; $i -le 720; $i++) {
+            Start-Sleep -Seconds 30
+            
+            if ($i % 60 -eq 0) {
+              $elapsed = $i / 2
+              Write-Host "⏱️ Geçen süre: $elapsed dakika - RDP aktif"
+              
+              $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+              if ($ngrokProcess) {
+                Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
+              } else {
+                Write-Host "❌ Ngrok process bulunamadı!"
+              }
+            }
+          }
+          
+          Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
