@@ -1,4 +1,4 @@
-name: Bore
+name: aBore
 
 on:
   workflow_dispatch:
@@ -54,13 +54,15 @@ jobs:
       shell: pwsh
       run: |
         $outputFile = Join-Path $PWD 'bore_output.txt'
+        $errorFile = Join-Path $PWD 'bore_error.txt'
         
-        # Önceki çıktı dosyasını temizle
+        # Önceki çıktı dosyalarını temizle
         if (Test-Path $outputFile) { Remove-Item $outputFile -Force }
+        if (Test-Path $errorFile) { Remove-Item $errorFile -Force }
         
         # Bore tünelini başlat
         Write-Host "Bore tüneli başlatılıyor..."
-        $process = Start-Process -FilePath '.\bore.exe' -ArgumentList 'local 3389 --to bore.pub' -RedirectStandardOutput $outputFile -RedirectStandardError $outputFile -WindowStyle Hidden -PassThru
+        $process = Start-Process -FilePath '.\bore.exe' -ArgumentList 'local 3389 --to bore.pub' -RedirectStandardOutput $outputFile -RedirectStandardError $errorFile -WindowStyle Hidden -PassThru
         
         # Port bilgisini yakala
         $port = $null
@@ -68,9 +70,16 @@ jobs:
         $startTime = Get-Date
         
         while (((Get-Date) - $startTime).TotalSeconds -lt $maxWaitTime) {
+          # Hem output hem error dosyasını kontrol et
+          $content = ""
           if (Test-Path $outputFile) {
-            $content = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
-            
+            $content += Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
+          }
+          if (Test-Path $errorFile) {
+            $content += Get-Content $errorFile -Raw -ErrorAction SilentlyContinue
+          }
+          
+          if ($content) {
             # Farklı port formatlarını kontrol et
             if ($content -match 'bore\.pub:(\d+)') { 
               $port = $matches[1]
@@ -88,16 +97,24 @@ jobs:
               $port = $matches[1]
               break 
             }
+            if ($content -match 'forwarding.*:(\d+)') { 
+              $port = $matches[1]
+              break 
+            }
           }
           Start-Sleep -Seconds 2
         }
         
-        # Port bulunamazsa hata ver
+        # Port bulunamazsa hata ver ve tüm çıktıları göster
         if (-not $port) {
           Write-Host "HATA: Bore portu tespit edilemedi!"
-          Write-Host "Bore çıktısı:"
+          Write-Host "=== BORE OUTPUT ==="
           if (Test-Path $outputFile) { 
             Get-Content $outputFile | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host "=== BORE ERROR ==="
+          if (Test-Path $errorFile) { 
+            Get-Content $errorFile | ForEach-Object { Write-Host $_ }
           }
           throw "Bore portu bulunamadı - tünel başlatılamadı"
         }
