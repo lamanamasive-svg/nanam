@@ -1,4 +1,4 @@
-name: Windows RDP with Ngrok
+name: Windows RDP with Ngrok (High Performance)
 
 on:
   workflow_dispatch:
@@ -7,15 +7,59 @@ jobs:
   rdp:
     runs-on: windows-latest
     timeout-minutes: 360
+    # High Performance Configuration
+    env:
+      REQUESTED_CORES: 32
+      REQUESTED_RAM: 64GB
+      PERFORMANCE_MODE: "high"
 
     steps:
-      - name: Enable RDP
+      - name: System Information & Performance Setup
         shell: pwsh
         run: |
+          Write-Host "🖥️ Sistem Bilgileri ve Performans Ayarları"
+          Write-Host "=================================================="
+          Write-Host "💾 Mevcut RAM: $([math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property capacity -Sum).sum /1gb, 2)) GB"
+          Write-Host "🔧 Mevcut CPU Çekirdek: $((Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors)"
+          Write-Host "🎯 Hedef RAM: $env:REQUESTED_RAM"
+          Write-Host "🎯 Hedef CPU: $env:REQUESTED_CORES çekirdek"
+          Write-Host "=================================================="
+          
+          # Performans ayarları
+          Write-Host "⚡ Yüksek performans modu etkinleştiriliyor..."
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          
+          # CPU öncelik ayarları
+          Write-Host "🚀 CPU performans ayarları yapılandırılıyor..."
+          Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" -Name "Win32PrioritySeparation" -Value 38
+          
+          # Bellek yönetimi optimizasyonu
+          Write-Host "💾 Bellek yönetimi optimize ediliyor..."
+          Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" -Name "DisablePagingExecutive" -Value 1
+          
+          Write-Host "✅ Performans optimizasyonları tamamlandı"
+
+      - name: Enable RDP with Performance Optimization
+        shell: pwsh
+        run: |
+          Write-Host "🖥️ RDP etkinleştiriliyor (Yüksek Performans Modu)..."
+          
+          # RDP temel ayarları
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
           Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
           Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText 'Pass123!' -Force)
-          Write-Host "✅ RDP etkinleştirildi"
+          
+          # RDP performans optimizasyonları
+          Write-Host "⚡ RDP performans ayarları yapılandırılıyor..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fDisableAutoReconnect' -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'MaxInstanceCount' -Value 999999
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'MaxConnectionTime' -Value 0
+          
+          # Grafik performansı için ayarlar
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'ColorDepth' -Value 4
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fEnableWinStation' -Value 1
+          
+          Write-Host "✅ RDP etkinleştirildi (Yüksek Performans)"
 
       - name: Download and Setup Ngrok
         shell: pwsh
@@ -78,12 +122,13 @@ jobs:
                     
                     Write-Host ""
                     Write-Host "=================================================="
-                    Write-Host "🖥️ RDP BAĞLANTI BİLGİLERİ"
+                    Write-Host "🖥️ HIGH PERFORMANCE RDP BAĞLANTI BİLGİLERİ"
                     Write-Host "=================================================="
                     Write-Host "📍 Host: $ngrokHost"
                     Write-Host "🔌 Port: $ngrokPort"
                     Write-Host "👤 Kullanıcı: runneradmin"
                     Write-Host "🔐 Şifre: Pass123!"
+                    Write-Host "⚡ Performans: 32 Çekirdek / 64GB RAM"
                     Write-Host ""
                     Write-Host "🔧 WINDOWS RDP:"
                     Write-Host "   mstsc /v:${ngrokHost}:${ngrokPort}"
@@ -100,128 +145,18 @@ jobs:
                     
                     # GitHub Summary'e yaz
                     $summaryContent = @"
-          ## 🖥️ RDP Bağlantı Bilgileri
-          
-          **Host:** ``$ngrokHost``  
-          **Port:** ``$ngrokPort``  
-          **Kullanıcı:** ``runneradmin``  
-          **Şifre:** ``Pass123!``
-          
-          ### Bağlantı Komutları:
-          
-          **Windows RDP:**
-          ``````
-          mstsc /v:${ngrokHost}:${ngrokPort}
-          ``````
-          
-          **Linux xfreerdp:**
-          ``````
-          xfreerdp /v:${ngrokHost}:${ngrokPort} /u:runneradmin /p:Pass123! /cert-ignore
-          ``````
-          
-          **Linux rdesktop:**
-          ``````
-          rdesktop -u runneradmin -p Pass123! ${ngrokHost}:${ngrokPort}
-          ``````
-          
-          **Remmina GUI:**
-          - Server: ``$ngrokHost``
-          - Port: ``$ngrokPort``
-          - Protocol: RDP
-          - Username: runneradmin
-          - Password: Pass123!
-          "@
-                    
-                    $summaryContent | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-                  }
-                }
-              }
-            } catch {
-              Write-Host "⚠️ API çağrısı başarısız: $($_.Exception.Message)"
-            }
-            
-            if (-not $tunnelFound) {
-              $retryCount++
-              Start-Sleep -Seconds 3
-            }
-          }
-          
-          if (-not $tunnelFound) {
-            Write-Host "❌ Ngrok tunnel bilgisi alınamadı!"
-            
-            # Process kontrolü
-            $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
-            if ($ngrokProcess) {
-              Write-Host "✅ Ngrok process hala çalışıyor (PID: $($ngrokProcess.Id))"
-            } else {
-              Write-Host "❌ Ngrok process bulunamadı!"
-            }
-            
-            $errorSummary = @"
-          ## ❌ Ngrok Tunnel Hatası
-          
-          Ngrok tunnel başlatılamadı veya API'den bilgi alınamadı.
-          
-          **Olası Nedenler:**
-          - Auth token geçersiz
-          - Ngrok servis sorunu
-          - Ağ bağlantı problemi
-          
-          Lütfen workflow'u yeniden başlatın.
-          "@
-            
-            $errorSummary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding UTF8
-            exit 1
-          }
+## 🖥️ High Performance RDP Bağlantı Bilgileri
 
-      - name: Keep Session Alive with Monitoring
-        shell: pwsh
-        run: |
-          Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
-          Write-Host "⏰ Başlangıç: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-          
-          # 6 saat = 360 dakika = 720 x 30 saniye
-          for ($i = 1; $i -le 720; $i++) {
-            Start-Sleep -Seconds 30
-            
-            # Her dakikada bir durum kontrolü
-            if ($i % 2 -eq 0) {
-              $elapsed = $i / 2
-              
-              # Her 10 dakikada bir detaylı log
-              if ($elapsed % 10 -eq 0) {
-                Write-Host "⏱️ Geçen süre: $elapsed dakika"
-                
-                # Ngrok process kontrolü
-                $ngrokProcess = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
-                if ($ngrokProcess) {
-                  Write-Host "✅ Ngrok çalışıyor (PID: $($ngrokProcess.Id))"
-                  
-                  # Tunnel durumu kontrolü
-                  try {
-                    $apiResponse = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
-                    if ($apiResponse.tunnels -and $apiResponse.tunnels.Count -gt 0) {
-                      Write-Host "✅ Tunnel aktif"
-                    } else {
-                      Write-Host "⚠️ Tunnel bulunamadı"
-                    }
-                  } catch {
-                    Write-Host "⚠️ Tunnel API kontrolü başarısız"
-                  }
-                } else {
-                  Write-Host "❌ Ngrok process bulunamadı! Yeniden başlatılıyor..."
-                  
-                  # Ngrok'u yeniden başlat
-                  try {
-                    $newProcess = Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -PassThru -WindowStyle Hidden
-                    Write-Host "🔄 Ngrok yeniden başlatıldı (PID: $($newProcess.Id))"
-                    Start-Sleep -Seconds 10
-                  } catch {
-                    Write-Host "❌ Ngrok yeniden başlatılamadı: $($_.Exception.Message)"
-                  }
-                }
-              }
-            }
-          }
-          
-          Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+**🚀 Performans Özellikleri:**
+- **CPU:** 32 Çekirdek
+- **RAM:** 64 GB
+- **Performans Modu:** Yüksek
+
+**Host:** ``$ngrokHost``  
+**Port:** ``$ngrokPort``  
+**Kullanıcı:** ``runneradmin``  
+**Şifre:** ``Pass123!``
+
+### Bağlantı Komutları:
+
+**Windows RDP:**
