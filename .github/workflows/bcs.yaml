@@ -1,4 +1,4 @@
-name: aBore
+name: RDP with Bore
 
 on:
   workflow_dispatch:
@@ -12,38 +12,36 @@ jobs:
     - name: Enable RDP
       shell: pwsh
       run: |
-        # RDP servisini etkinleştir
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0
-        
-        # Windows Firewall'da RDP'ye izin ver
         Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
-        
-        # runneradmin kullanıcısı için şifre belirle
         Set-LocalUser -Name 'runneradmin' -Password (ConvertTo-SecureString -AsPlainText 'Pass123!' -Force)
-        
         Write-Host "RDP başarıyla etkinleştirildi"
+
+    - name: Configure RDP for Linux Clients
+      shell: pwsh
+      run: |
+        # Linux RDP istemcileri için uyumluluk ayarları
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fAllowSecProtocolNegotiation' -Value 0
+        
+        # RDP servisini yeniden başlat
+        Restart-Service TermService -Force
+        Write-Host "Linux uyumluluğu için RDP yapılandırıldı"
 
     - name: Download and Extract Bore
       shell: pwsh
       run: |
-        # Bore'u indir
         Write-Host "Bore indiriliyor..."
         Invoke-WebRequest -Uri 'https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-pc-windows-msvc.zip' -OutFile bore.zip
-        
-        # Arşivi çıkart
         Expand-Archive bore.zip -DestinationPath ./bore_temp -Force
         
-        # bore.exe dosyasını bul ve ana dizine taşı
         $exe = Get-ChildItem -Path ./bore_temp -Recurse -File -Filter 'bore.exe' | Select-Object -First 1
         if ($exe) { 
           $targetPath = Join-Path $PWD 'bore.exe'
-          # Hedef dosya varsa sil
           if (Test-Path $targetPath) { Remove-Item $targetPath -Force }
-          # Dosyayı kopyala
           Copy-Item $exe.FullName -Destination $targetPath -Force 
-          Write-Host "Bore başarıyla indirildi ve hazırlandı"
-          
-          # Geçici klasörü temizle
+          Write-Host "Bore başarıyla hazırlandı"
           Remove-Item ./bore_temp -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item bore.zip -Force -ErrorAction SilentlyContinue
         } else {
@@ -56,21 +54,17 @@ jobs:
         $outputFile = Join-Path $PWD 'bore_output.txt'
         $errorFile = Join-Path $PWD 'bore_error.txt'
         
-        # Önceki çıktı dosyalarını temizle
         if (Test-Path $outputFile) { Remove-Item $outputFile -Force }
         if (Test-Path $errorFile) { Remove-Item $errorFile -Force }
         
-        # Bore tünelini başlat
         Write-Host "Bore tüneli başlatılıyor..."
         $process = Start-Process -FilePath '.\bore.exe' -ArgumentList 'local 3389 --to bore.pub' -RedirectStandardOutput $outputFile -RedirectStandardError $errorFile -WindowStyle Hidden -PassThru
         
-        # Port bilgisini yakala
         $port = $null
         $maxWaitTime = 120
         $startTime = Get-Date
         
         while (((Get-Date) - $startTime).TotalSeconds -lt $maxWaitTime) {
-          # Hem output hem error dosyasını kontrol et
           $content = ""
           if (Test-Path $outputFile) {
             $content += Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
@@ -80,83 +74,43 @@ jobs:
           }
           
           if ($content) {
-            # Farklı port formatlarını kontrol et
             if ($content -match 'bore\.pub:(\d+)') { 
-              $port = $matches[1]
-              break 
+              $port = $matches[1]; break 
             }
             if ($content -match 'remote port(?:\s+is|\s+assigned\s+as|\s+assigned|:)?\s*(\d+)') { 
-              $port = $matches[1]
-              break 
-            }
-            if ($content -match 'assigned port:?\s*(\d+)') { 
-              $port = $matches[1]
-              break 
-            }
-            if ($content -match 'listening on bore\.pub:(\d+)') { 
-              $port = $matches[1]
-              break 
-            }
-            if ($content -match 'forwarding.*:(\d+)') { 
-              $port = $matches[1]
-              break 
+              $port = $matches[1]; break 
             }
           }
           Start-Sleep -Seconds 2
         }
         
-        # Port bulunamazsa hata ver ve tüm çıktıları göster
         if (-not $port) {
           Write-Host "HATA: Bore portu tespit edilemedi!"
-          Write-Host "=== BORE OUTPUT ==="
-          if (Test-Path $outputFile) { 
-            Get-Content $outputFile | ForEach-Object { Write-Host $_ }
-          }
-          Write-Host "=== BORE ERROR ==="
-          if (Test-Path $errorFile) { 
-            Get-Content $errorFile | ForEach-Object { Write-Host $_ }
-          }
-          throw "Bore portu bulunamadı - tünel başlatılamadı"
+          throw "Bore portu bulunamadı"
         }
         
-        # Bağlantı bilgilerini göster
         $fullAddress = "bore.pub:$port"
         Write-Host ""
         Write-Host "=================================================="
         Write-Host "🔗 RDP BAĞLANTI BİLGİLERİ"
         Write-Host "=================================================="
-        Write-Host "📍 Host Adresi    : $fullAddress"
-        Write-Host "👤 Kullanıcı Adı  : runneradmin"
-        Write-Host "🔐 Şifre          : Pass123!"
+        Write-Host "📍 Host: $fullAddress"
+        Write-Host "👤 User: runneradmin"
+        Write-Host "🔐 Pass: Pass123!"
         Write-Host ""
-        Write-Host "🖥️  REMMINA İÇİN:"
+        Write-Host "🖥️  REMMINA AYARLARI:"
         Write-Host "   • Protokol: RDP"
         Write-Host "   • Sunucu: $fullAddress"
-        Write-Host "   • Kullanıcı: runneradmin"
-        Write-Host "   • Şifre: Pass123!"
-        Write-Host "=================================================="
+        Write-Host "   • Güvenlik: RDP veya Any"
+        Write-Host "   • Disable encryption: ✓"
+        Write-Host "   • Ignore certificate: ✓"
         Write-Host ""
-        
-        # Tünel durumunu kontrol et
-        if ($process -and !$process.HasExited) {
-          Write-Host "✅ Bore tüneli başarıyla çalışıyor (PID: $($process.Id))"
-        } else {
-          Write-Host "⚠️  Bore tüneli durumu belirsiz"
-        }
+        Write-Host "🔧 ALTERNATIF KOMUT:"
+        Write-Host "   xfreerdp /v:$fullAddress /u:runneradmin /p:Pass123! /cert-ignore /sec:rdp"
+        Write-Host "=================================================="
 
     - name: Keep Session Alive
       shell: pwsh
       run: |
-        Write-Host "🕐 Oturum 6 saat boyunca açık tutulacak..."
-        Write-Host "⏰ Başlangıç zamanı: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-        
-        # Her 30 dakikada bir durum mesajı göster
-        for ($i = 1; $i -le 720; $i++) {
-          Start-Sleep -Seconds 30
-          if ($i % 60 -eq 0) {
-            $elapsed = $i / 2
-            Write-Host "⏱️  Geçen süre: $elapsed dakika - Oturum hala aktif"
-          }
-        }
-        
-        Write-Host "⏰ Oturum süresi doldu: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        Write-Host "🕐 Oturum 6 saat açık kalacak..."
+        Start-Sleep -Seconds 21600
