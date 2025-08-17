@@ -1,0 +1,84 @@
+name: Windows RDP Access
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Setup RDP
+      run: |
+        # Enable RDP
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
+        
+        # Enable firewall rules for RDP
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+        
+        # Set authentication
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+        
+        # Set password for runneradmin
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "ActionRunner2024!" -Force)
+        
+        # Enable the user account
+        Enable-LocalUser -Name "runneradmin"
+      shell: powershell
+
+    - name: Download and Setup Cloudflared
+      run: |
+        # Download cloudflared
+        Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile "cloudflared.exe"
+        
+        # Make it executable and start tunnel in background
+        Start-Process -FilePath ".\cloudflared.exe" -ArgumentList "tunnel --url tcp://localhost:3389" -WindowStyle Hidden
+        
+        # Wait for tunnel to establish
+        Start-Sleep -Seconds 15
+      shell: powershell
+
+    - name: Get Connection Info
+      run: |
+        Write-Host "========================================="
+        Write-Host "RDP CONNECTION INFORMATION:"
+        Write-Host "========================================="
+        
+        # Try to get cloudflared tunnel URL from logs
+        Write-Host "Checking for Cloudflared tunnel URL..."
+        
+        # Get public IP as backup
+        try {
+          $publicIP = (Invoke-WebRequest -Uri "http://ifconfig.me/ip" -TimeoutSec 10).Content.Trim()
+          Write-Host "Public IP: $publicIP"
+        } catch {
+          Write-Host "Could not retrieve public IP"
+        }
+        
+        Write-Host ""
+        Write-Host "CREDENTIALS:"
+        Write-Host "Username: runneradmin"
+        Write-Host "Password: ActionRunner2024!"
+        Write-Host ""
+        Write-Host "CONNECTION METHODS:"
+        Write-Host "1. Check the cloudflared process output above for tunnel URL"
+        Write-Host "2. Look for format: https://xxxxx.trycloudflare.com"
+        Write-Host "3. Use that URL in your RDP client"
+        Write-Host "========================================="
+      shell: powershell
+
+    - name: Keep Session Alive
+      run: |
+        Write-Host "Keeping session alive for 6 hours..."
+        Write-Host "Current time: $(Get-Date)"
+        
+        $endTime = (Get-Date).AddHours(6)
+        while ((Get-Date) -lt $endTime) {
+          $remaining = $endTime - (Get-Date)
+          Write-Host "Time remaining: $($remaining.Hours)h $($remaining.Minutes)m - $(Get-Date -Format 'HH:mm:ss')"
+          Start-Sleep -Seconds 300  # 5 minutes
+        }
+      shell: powershell
